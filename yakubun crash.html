@@ -1,0 +1,1086 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<title>約分マスター・クラッシュ！</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: #000;
+    overflow: hidden;
+    font-family: 'Arial Rounded MT Bold', 'Hiragino Maru Gothic ProN', sans-serif;
+    touch-action: none;
+  }
+  canvas { display: block; }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<script>
+// =============================================
+// 約分マスター・クラッシュ！ - テンポ特化版
+// =============================================
+
+const canvas = document.getElementById('c');
+const ctx = canvas.getContext('2d');
+
+// ============ サイズ ============
+function resize() {
+  canvas.width  = window.innerWidth;
+  canvas.height = window.innerHeight;
+}
+resize();
+window.addEventListener('resize', resize);
+
+// ============ Web Audio ============
+const AC = new (window.AudioContext || window.webkitAudioContext)();
+
+function playTone(freq, type, dur, vol=0.4, decay=0.15) {
+  const o = AC.createOscillator();
+  const g = AC.createGain();
+  o.connect(g); g.connect(AC.destination);
+  o.type = type; o.frequency.value = freq;
+  g.gain.setValueAtTime(vol, AC.currentTime);
+  g.gain.exponentialRampToValueAtTime(0.001, AC.currentTime + dur);
+  o.start(); o.stop(AC.currentTime + dur);
+}
+function sfxSuccess(combo) {
+  const base = 600 + Math.min(combo * 40, 400);
+  playTone(base, 'sine', 0.18, 0.5);
+  setTimeout(() => playTone(base * 1.5, 'sine', 0.12, 0.3), 80);
+}
+function sfxCombo() {
+  [523, 659, 784, 1047].forEach((f,i) => setTimeout(() => playTone(f,'triangle',0.15,0.4), i*50));
+}
+function sfxFail() {
+  playTone(120, 'sawtooth', 0.3, 0.5);
+  playTone(100, 'square',   0.2, 0.3);
+}
+function sfxBonus() {
+  [523,659,784,1047,1319].forEach((f,i) => setTimeout(() => playTone(f,'triangle',0.2,0.5), i*40));
+}
+function sfxClick() { playTone(800,'sine',0.08,0.2); }
+
+// ============ 数学ユーティリティ ============
+function gcd(a, b) { return b === 0 ? a : gcd(b, a % b); }
+
+// 約分できる分数を生成（分子・分母が公約数>1）
+// divisorHint: 実際に使った約数（色分け・レア演出用）
+function makeReducible() {
+  // ③ 7・11 は時間orスコアで解放
+  const unlockAdvanced = (elapsedSec > CONFIG.ADVANCED_UNLOCK_SEC || score > CONFIG.ADVANCED_UNLOCK_PTS);
+  const divisorsBasic    = [2,3,4,5,6];
+  const divisorsAdvanced = [7,11];
+  // ⑨ 時間経過で7・11の割合UP（最大25%）
+  let pool;
+  if (unlockAdvanced) {
+    const advRatio = Math.min(0.25, (elapsedSec - CONFIG.ADVANCED_UNLOCK_SEC) / 120);
+    pool = Math.random() < advRatio ? divisorsAdvanced : divisorsBasic;
+  } else {
+    pool = divisorsBasic;
+  }
+  const d = pool[Math.floor(Math.random() * pool.length)];
+  const maxBase = Math.floor(22 / d);
+  let n, m;
+  let attempts = 0;
+  do {
+    n = Math.floor(Math.random() * Math.max(1,maxBase)) + 1;
+    m = Math.floor(Math.random() * Math.max(1,maxBase)) + 1;
+    attempts++;
+  } while ((n === m || gcd(n,m) !== 1) && attempts < 100);
+  return { num: n*d, den: m*d, reducible: true, divisor: d };
+}
+
+// 約分できない分数（互いに素）
+function makeIrreducible() {
+  const primes = [2,3,5,7,11,13];
+  let num, den;
+  let attempts = 0;
+  do {
+    num = Math.floor(Math.random() * 18) + 2;
+    den = Math.floor(Math.random() * 18) + 2;
+    attempts++;
+  } while ((gcd(num,den) !== 1 || num === den) && attempts < 100);
+  return { num, den, reducible: false };
+}
+
+// 約分後の分数を返す
+function reduce(num, den) {
+  const g = gcd(num, den);
+  return { num: num/g, den: den/g };
+}
+
+// ============ 称号テーブル（累計スコア→称号） ============
+const TITLES = [
+  { threshold:      0, title: '約分見習い',       color: '#AAAAAA', icon: '🌱' },
+  { threshold:    500, title: '約分のたまご',      color: '#88DDFF', icon: '🥚' },
+  { threshold:   1500, title: '約分チャレンジャー', color: '#66FF99', icon: '⚔️' },
+  { threshold:   3000, title: '約分ファイター',     color: '#FFDD44', icon: '🔥' },
+  { threshold:   6000, title: '約分マスター',       color: '#FF8844', icon: '⭐' },
+  { threshold:  10000, title: '約分エキスパート',   color: '#FF66CC', icon: '💎' },
+  { threshold:  20000, title: '約分の達人',         color: '#CC66FF', icon: '🏆' },
+  { threshold:  40000, title: '約分伝説',           color: '#FF4444', icon: '🌟' },
+  { threshold:  80000, title: '約分レジェンド',     color: '#FF2299', icon: '👑' },
+  { threshold: 150000, title: '約分神',             color: '#FFD700', icon: '⚡' },
+];
+
+// 累計スコアから称号を返す
+function getTitleData(totalScore) {
+  let result = TITLES[0];
+  for (const t of TITLES) {
+    if (totalScore >= t.threshold) result = t;
+    else break;
+  }
+  return result;
+}
+
+// 次の称号までの情報
+function getNextTitle(totalScore) {
+  for (let i = TITLES.length - 1; i >= 0; i--) {
+    if (totalScore >= TITLES[i].threshold) {
+      return i + 1 < TITLES.length ? TITLES[i + 1] : null;
+    }
+  }
+  return TITLES[1];
+}
+
+// ============ localStorage 永続データ ============
+const LS_KEY_BEST  = 'yakubun_best';
+const LS_KEY_TOTAL = 'yakubun_total';
+const LS_KEY_PLAYS = 'yakubun_plays';
+
+function loadRecord() {
+  return {
+    best:  parseInt(localStorage.getItem(LS_KEY_BEST)  || '0'),
+    total: parseInt(localStorage.getItem(LS_KEY_TOTAL) || '0'),
+    plays: parseInt(localStorage.getItem(LS_KEY_PLAYS) || '0'),
+  };
+}
+
+function saveRecord(thisScore) {
+  const rec = loadRecord();
+  const newBest  = Math.max(rec.best, thisScore);
+  const newTotal = rec.total + thisScore;
+  const newPlays = rec.plays + 1;
+  localStorage.setItem(LS_KEY_BEST,  newBest);
+  localStorage.setItem(LS_KEY_TOTAL, newTotal);
+  localStorage.setItem(LS_KEY_PLAYS, newPlays);
+  return {
+    best: newBest, total: newTotal, plays: newPlays,
+    isNewBest: thisScore > rec.best && thisScore > 0,
+    prevTotal: rec.total,
+  };
+}
+
+// ゲームオーバー時に確定するデータ
+let savedResult = null; // { best, total, plays, isNewBest, prevTotal }
+
+// ============ 定数（調整可能） ============
+const CONFIG = {
+  SPAWN_INTERVAL_INIT: 1200, // ms ★最初からちょい忙しい
+  SPAWN_INTERVAL_MIN:  500,
+  FALL_SPEED_INIT:     1.6,  // ★やや速め
+  FALL_SPEED_MAX:      4.0,
+  SPEED_INC_PER_SEC:   0.008,
+  REDUCIBLE_RATIO:     0.55, // 約分できる分数の割合
+  BUBBLE_RADIUS:       52,
+  LIVES_INIT:          3,
+  COMBO_BONUS_TRIGGER: 8,    // ボーナスタイム発動コンボ数
+  HINT_DELAY:          2200, // ms後にヒント点滅
+  PARTICLE_COUNT:      18,
+  SHAKE_DUR:           300,
+  RESULT_DISPLAY:      480,  // ms (約分結果表示時間)
+  GRACE_PERIOD:        10,   // ②最初10秒は見逃しペナルティなし
+  ADVANCED_UNLOCK_SEC: 15,   // ③7・11解放タイム
+  ADVANCED_UNLOCK_PTS: 150,  // ③7・11解放スコア
+};
+
+// ============ ゲーム状態 ============
+let state = 'start'; // 'start' | 'play' | 'bonus' | 'gameover'
+let score = 0, combo = 0, lives = CONFIG.LIVES_INIT;
+let fallSpeed = CONFIG.FALL_SPEED_INIT;
+let spawnInterval = CONFIG.SPAWN_INTERVAL_INIT;
+let lastSpawnTime = 0;
+let elapsedSec = 0;
+let lastTime = 0;
+let shakeTimer = 0, shakeAmt = 0;
+let flashTimer = 0; // ⑩ 成功フラッシュ
+let bubbles = [];
+let particles = [];
+let floatingTexts = [];
+let bonusState = null; // { frac, choices, timer, answered }
+let bgStars = [];
+let seenDivisors = new Set(); // ⑧ 初出判定（7・11）
+
+// ============ 背景の星を初期化 ============
+function initStars() {
+  bgStars = [];
+  for (let i = 0; i < 120; i++) {
+    bgStars.push({
+      x: Math.random() * canvas.width,
+      y: Math.random() * canvas.height,
+      r: Math.random() * 1.8 + 0.3,
+      speed: Math.random() * 0.3 + 0.05,
+      brightness: Math.random()
+    });
+  }
+}
+
+// ============ バブルクラス ============
+class Bubble {
+  constructor() {
+    const isReducible = Math.random() < CONFIG.REDUCIBLE_RATIO;
+    const f = isReducible ? makeReducible() : makeIrreducible();
+    this.num = f.num;
+    this.den = f.den;
+    this.reducible = f.reducible;
+    this.divisor   = f.divisor || null; // ④レア判定用
+    this.r = CONFIG.BUBBLE_RADIUS + Math.random() * 10;
+    this.x = this.r + Math.random() * (canvas.width - this.r * 2);
+    this.y = -this.r;
+    this.vy = fallSpeed + Math.random() * 0.5;
+    this.alive = true;
+    this.spawnTime = performance.now();
+    this.hintAlpha = 0;
+    this.glowPhase = Math.random() * Math.PI * 2;
+    // ④ 色：7=紫、11=金、その他約分できる=オレンジ〜黄、できない=青〜シアン
+    if (this.divisor === 7)       this.hue = 280; // 紫
+    else if (this.divisor === 11) this.hue = 50;  // 金
+    else if (this.reducible)      this.hue = 30 + Math.random() * 40;  // オレンジ〜黄
+    else                          this.hue = 190 + Math.random() * 40; // 青〜シアン
+    // レアバブルは少し大きく
+    if (this.divisor === 7 || this.divisor === 11) this.r += 8;
+  }
+
+  update(dt) {
+    this.y += this.vy;
+    this.glowPhase += 0.06;
+    // ヒント点滅
+    const age = performance.now() - this.spawnTime;
+    if (this.reducible && age > CONFIG.HINT_DELAY) {
+      this.hintAlpha = Math.min(1, (age - CONFIG.HINT_DELAY) / 800) * 0.55;
+    }
+    // 画面下に落ちた
+    if (this.y - this.r > canvas.height) {
+      // ② 最初の10秒は見逃しペナルティなし（練習時間）
+      if (this.reducible && elapsedSec > CONFIG.GRACE_PERIOD) missLife('見逃し');
+      this.alive = false;
+    }
+  }
+
+  draw() {
+    const glow = 0.4 + Math.sin(this.glowPhase) * 0.15;
+    const cx = this.x, cy = this.y;
+
+    // 光るオーラ（ヒント）
+    if (this.hintAlpha > 0) {
+      ctx.save();
+      ctx.globalAlpha = this.hintAlpha;
+      ctx.beginPath();
+      ctx.arc(cx, cy, this.r + 12, 0, Math.PI*2);
+      ctx.fillStyle = `hsl(${this.hue},100%,70%)`;
+      ctx.fill();
+      ctx.restore();
+    }
+
+    // バブル本体グラデーション
+    const grad = ctx.createRadialGradient(cx - this.r*0.3, cy - this.r*0.3, 2, cx, cy, this.r);
+    grad.addColorStop(0, `hsla(${this.hue},80%,85%,0.95)`);
+    grad.addColorStop(0.6, `hsla(${this.hue},70%,55%,0.92)`);
+    grad.addColorStop(1, `hsla(${this.hue},60%,30%,0.95)`);
+
+    ctx.save();
+    ctx.globalAlpha = glow + 0.4;
+    // 外縁グロー
+    ctx.shadowColor = `hsl(${this.hue},100%,70%)`;
+    ctx.shadowBlur = 20;
+    ctx.beginPath();
+    ctx.arc(cx, cy, this.r, 0, Math.PI*2);
+    ctx.fillStyle = grad;
+    ctx.fill();
+    ctx.shadowBlur = 0;
+
+    // 境界線
+    ctx.strokeStyle = `hsla(${this.hue},90%,75%,0.8)`;
+    ctx.lineWidth = 2;
+    ctx.stroke();
+
+    // ハイライト
+    ctx.beginPath();
+    ctx.arc(cx - this.r*0.28, cy - this.r*0.28, this.r*0.22, 0, Math.PI*2);
+    ctx.fillStyle = 'rgba(255,255,255,0.35)';
+    ctx.fill();
+    ctx.restore();
+
+    // 分数テキスト
+    ctx.save();
+    ctx.shadowColor = 'rgba(0,0,0,0.6)';
+    ctx.shadowBlur = 4;
+    const fs = Math.max(18, Math.min(28, this.r * 0.55));
+    ctx.font = `bold ${fs}px 'Arial Rounded MT Bold', sans-serif`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillStyle = '#fff';
+    ctx.fillText(this.num, cx, cy - fs * 0.45);
+    ctx.lineWidth = 2;
+    ctx.strokeStyle = '#fff';
+    ctx.beginPath();
+    ctx.moveTo(cx - fs*0.8, cy);
+    ctx.lineTo(cx + fs*0.8, cy);
+    ctx.stroke();
+    ctx.fillText(this.den, cx, cy + fs * 0.45);
+    ctx.restore();
+  }
+}
+
+// ============ パーティクルクラス ============
+class Particle {
+  constructor(x, y, hue) {
+    this.x = x; this.y = y;
+    const angle = Math.random() * Math.PI * 2;
+    const speed = 3 + Math.random() * 7;
+    this.vx = Math.cos(angle) * speed;
+    this.vy = Math.sin(angle) * speed - 2;
+    this.life = 1;
+    this.hue = hue + (Math.random()-0.5)*40;
+    this.r = 4 + Math.random() * 6;
+    this.shape = Math.random() < 0.5 ? 'circle' : 'rect';
+    this.rot = Math.random() * Math.PI * 2;
+    this.rotSpeed = (Math.random()-0.5)*0.2;
+  }
+  update() {
+    this.x += this.vx; this.y += this.vy;
+    this.vy += 0.3;
+    this.vx *= 0.97;
+    this.life -= 0.035;
+    this.rot += this.rotSpeed;
+  }
+  draw() {
+    ctx.save();
+    ctx.globalAlpha = Math.max(0, this.life);
+    ctx.translate(this.x, this.y);
+    ctx.rotate(this.rot);
+    ctx.fillStyle = `hsl(${this.hue},100%,65%)`;
+    ctx.shadowColor = `hsl(${this.hue},100%,70%)`;
+    ctx.shadowBlur = 8;
+    if (this.shape === 'circle') {
+      ctx.beginPath();
+      ctx.arc(0, 0, this.r, 0, Math.PI*2);
+      ctx.fill();
+    } else {
+      ctx.fillRect(-this.r, -this.r*0.5, this.r*2, this.r);
+    }
+    ctx.restore();
+  }
+}
+
+// ============ フローティングテキスト ============
+class FloatingText {
+  constructor(x, y, text, color='#FFD700', size=26) {
+    this.x = x; this.y = y;
+    this.text = text; this.color = color; this.size = size;
+    this.life = 1; this.vy = -2.5;
+  }
+  update() {
+    this.y += this.vy;
+    this.vy *= 0.92;
+    // _fastFade=trueのときは約0.5秒（20fps換算40フレーム）で消える
+    this.life -= this._fastFade ? 0.065 : 0.025;
+  }
+  draw() {
+    ctx.save();
+    ctx.globalAlpha = Math.max(0, this.life);
+    ctx.font = `bold ${this.size}px 'Arial Rounded MT Bold', sans-serif`;
+    ctx.textAlign = 'center';
+    ctx.fillStyle = this.color;
+    ctx.shadowColor = 'rgba(0,0,0,0.8)';
+    ctx.shadowBlur = 6;
+    ctx.fillText(this.text, this.x, this.y);
+    ctx.restore();
+  }
+}
+
+// ============ ゲーム操作 ============
+function startGame() {
+  sfxClick();
+  if (AC.state === 'suspended') AC.resume();
+  score = 0; combo = 0; lives = CONFIG.LIVES_INIT;
+  fallSpeed = CONFIG.FALL_SPEED_INIT;
+  spawnInterval = CONFIG.SPAWN_INTERVAL_INIT;
+  lastSpawnTime = 0; elapsedSec = 0; lastTime = 0;
+  bubbles = []; particles = []; floatingTexts = [];
+  bonusState = null; shakeTimer = 0; flashTimer = 0;
+  savedResult = null; gameoverTimer = 0;
+  seenDivisors = new Set();
+  state = 'play';
+}
+
+function spawnBubble() {
+  bubbles.push(new Bubble());
+}
+
+function missLife(reason) {
+  lives--;
+  shakeTimer = CONFIG.SHAKE_DUR;
+  shakeAmt = 10;
+  sfxFail();
+  floatingTexts.push(new FloatingText(canvas.width/2, canvas.height/2 - 60, '✕ ミス！', '#FF4444', 36));
+  if (lives <= 0) {
+    savedResult = saveRecord(score);
+    setTimeout(() => { state = 'gameover'; }, 300);
+  }
+}
+
+// タップ/クリック処理
+function onTap(px, py) {
+  if (AC.state === 'suspended') AC.resume();
+
+  if (state === 'start') { startGame(); return; }
+  if (state === 'gameover') { startGame(); return; }
+
+  if (state === 'bonus' && bonusState) {
+    handleBonusTap(px, py);
+    return;
+  }
+
+  if (state !== 'play') return;
+
+  // バブルとの当たり判定（上から順に）
+  let hit = false;
+  for (let i = bubbles.length - 1; i >= 0; i--) {
+    const b = bubbles[i];
+    const dx = px - b.x, dy = py - b.y;
+    if (Math.sqrt(dx*dx + dy*dy) < b.r) {
+      hit = true;
+      if (b.reducible) {
+        // ======== 正解！ ========
+        const r = reduce(b.num, b.den);
+        combo++;
+        const pts = 10 * (1 + Math.floor(combo / 3));
+        score += pts;
+
+        // ④⑩ レアバブルはパーティクル増量
+        const isRare = (b.divisor === 7 || b.divisor === 11);
+        const pCount = Math.floor((CONFIG.PARTICLE_COUNT + combo * 2) * (isRare ? 1.5 : 1));
+        spawnParticles(b.x, b.y, b.hue, pCount);
+
+        // ⑧ 初出の7・11は画面中央に大きく0.5秒だけ学習フラッシュ
+        if ((b.divisor === 7 || b.divisor === 11) && !seenDivisors.has(b.divisor)) {
+          seenDivisors.add(b.divisor);
+          const msg  = b.divisor === 7 ? '✨ 7でも割れる！' : '✨ 11でも割れる！';
+          const col  = b.divisor === 7 ? '#CC88FF' : '#FFD700';
+          // 中央・大きいサイズ・ライフ短め（0.5秒で消える）
+          const ft = new FloatingText(canvas.width / 2, canvas.height / 2 - 20, msg, col, 42);
+          ft.life = 1;
+          ft.vy   = -1.2;
+          // lifeの減衰を速くして約0.5秒で消えるよう上書き
+          ft._fastFade = true;
+          floatingTexts.push(ft);
+        }
+
+        // 約分結果フローティング
+        floatingTexts.push(new FloatingText(b.x, b.y - 20, `=${r.num}/${r.den}`, '#FFFFFF', 22));
+        if (combo >= 3) {
+          floatingTexts.push(new FloatingText(b.x, b.y - 50, `×${Math.floor(1+combo/3)}`, '#FFD700', 28));
+        }
+
+        // ⑦ コンボ10以上で毎回sfxCombo、それ以外は5の倍数でsfxCombo
+        if (combo >= 10) {
+          sfxCombo();
+        } else if (combo % 5 === 0) {
+          sfxCombo();
+        } else {
+          sfxSuccess(combo);
+        }
+
+        // ⑥ コンボ10の倍数で画面揺れ強化 + sfxCombo
+        if (combo > 0 && combo % 10 === 0) {
+          shakeTimer = 200;
+          shakeAmt   = 15;
+        }
+
+        // ⑤ バイブレーション（レアバブル優先）
+        if (navigator.vibrate) {
+          if (b.divisor === 7 || b.divisor === 11) {
+            navigator.vibrate([50, 30, 50]); // レア強め
+          } else if (combo >= 10) {
+            navigator.vibrate([20, 30, 20]); // コンボ
+          } else {
+            navigator.vibrate(30);           // 通常
+          }
+        }
+
+        // ⑩ 成功フラッシュ（レアは強め）
+        flashTimer = (b.divisor === 7 || b.divisor === 11) ? 140 : 80;
+
+        b.alive = false;
+        // ボーナスタイム発動
+        if (combo >= CONFIG.COMBO_BONUS_TRIGGER && Math.random() < 0.3) {
+          triggerBonus(b);
+        }
+      } else {
+        // 誤タップ
+        combo = 0;
+        missLife('誤タップ');
+      }
+      break;
+    }
+  }
+  // ハズレ（何もない場所）はペナルティなし
+}
+
+function spawnParticles(x, y, hue, count) {
+  for (let i = 0; i < count; i++) {
+    particles.push(new Particle(x, y, hue));
+  }
+}
+
+// ============ ボーナスタイム ============
+function triggerBonus(bubble) {
+  if (state !== 'play') return;
+  state = 'bonus';
+  const g = gcd(bubble.num, bubble.den);
+  // 正解の約数を生成
+  const correctDiv = g;
+  const others = [2,3,4,5,6,7].filter(d => d !== correctDiv && d <= Math.min(bubble.num, bubble.den));
+  const choices = [correctDiv];
+  while (choices.length < 3 && others.length > 0) {
+    const idx = Math.floor(Math.random() * others.length);
+    choices.push(others.splice(idx, 1)[0]);
+  }
+  // シャッフル
+  choices.sort(() => Math.random() - 0.5);
+  bonusState = {
+    frac: bubble,
+    choices,
+    correct: correctDiv,
+    timer: 3000,
+    answered: false,
+    rects: []
+  };
+  sfxBonus();
+}
+
+function handleBonusTap(px, py) {
+  if (!bonusState || bonusState.answered) return;
+  const rects = bonusState.rects;
+  for (let i = 0; i < rects.length; i++) {
+    const r = rects[i];
+    if (px >= r.x && px <= r.x+r.w && py >= r.y && py <= r.y+r.h) {
+      bonusState.answered = true;
+      if (bonusState.choices[i] === bonusState.correct) {
+        // ボーナス正解
+        score += 100 + combo * 10;
+        spawnParticles(canvas.width/2, canvas.height/2, 50, 60);
+        floatingTexts.push(new FloatingText(canvas.width/2, canvas.height/2 - 80, '🎉 BONUS +100!', '#FFD700', 40));
+        sfxBonus();
+        if (navigator.vibrate) navigator.vibrate([50, 30, 50]); // ⑤ボーナスバイブ
+        flashTimer = 150;
+      } else {
+        // ボーナス不正解
+        combo = 0;
+        sfxFail();
+        floatingTexts.push(new FloatingText(canvas.width/2, canvas.height/2 - 80, 'コンボリセット', '#FF6666', 30));
+      }
+      setTimeout(() => { state = 'play'; bonusState = null; }, 800);
+      return;
+    }
+  }
+}
+
+// ============ 描画関数 ============
+function drawBackground(t) {
+  // 宇宙グラデーション
+  const grad = ctx.createRadialGradient(canvas.width/2, canvas.height/2, 0, canvas.width/2, canvas.height/2, Math.max(canvas.width, canvas.height)*0.8);
+  grad.addColorStop(0, '#0a0520');
+  grad.addColorStop(0.5, '#060318');
+  grad.addColorStop(1, '#02010a');
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+  // 星
+  bgStars.forEach(s => {
+    s.y += s.speed;
+    if (s.y > canvas.height) { s.y = 0; s.x = Math.random()*canvas.width; }
+    const twinkle = 0.4 + Math.sin(t*0.002 + s.brightness*10) * 0.3;
+    ctx.beginPath();
+    ctx.arc(s.x, s.y, s.r, 0, Math.PI*2);
+    ctx.fillStyle = `rgba(200,200,255,${twinkle})`;
+    ctx.fill();
+  });
+}
+
+function drawHUD() {
+  const pad = 16;
+  const rec = loadRecord();
+  const td  = getTitleData(rec.total + score); // 今回のスコアも加味
+  // スコア
+  ctx.save();
+  ctx.font = 'bold 28px "Arial Rounded MT Bold", sans-serif';
+  ctx.fillStyle = '#FFD700';
+  ctx.shadowColor = '#FFA500';
+  ctx.shadowBlur = 12;
+  ctx.textAlign = 'left';
+  ctx.fillText(`${score}`, pad + 10, pad + 32);
+  ctx.font = '12px sans-serif';
+  ctx.fillStyle = 'rgba(255,220,100,0.6)';
+  ctx.shadowBlur = 0;
+  ctx.fillText('スコア', pad + 10, pad + 50);
+
+  // 称号（左下）
+  ctx.font = `12px "Arial Rounded MT Bold", sans-serif`;
+  ctx.fillStyle = td.color;
+  ctx.shadowColor = td.color;
+  ctx.shadowBlur = 8;
+  ctx.fillText(`${td.icon} ${td.title}`, pad + 10, canvas.height - 14);
+  ctx.shadowBlur = 0;
+
+  // コンボ
+  if (combo >= 3) {
+    const cx2 = canvas.width / 2;
+    ctx.textAlign = 'center';
+    ctx.font = `bold ${24 + Math.min(combo, 20)}px "Arial Rounded MT Bold", sans-serif`;
+    ctx.fillStyle = `hsl(${(combo * 12) % 360},100%,65%)`;
+    ctx.shadowColor = ctx.fillStyle;
+    ctx.shadowBlur = 20;
+    ctx.fillText(`⚡ ${combo} COMBO`, cx2, 44);
+  }
+
+  // ② 猶予期間中は「練習中」表示（tsはloopから渡せないのでperformance.nowで代替）
+  if (elapsedSec < CONFIG.GRACE_PERIOD) {
+    const remain = Math.ceil(CONFIG.GRACE_PERIOD - elapsedSec);
+    const pulse = 0.5 + Math.sin(performance.now() * 0.006) * 0.3;
+    ctx.textAlign = 'center';
+    ctx.font = '13px sans-serif';
+    ctx.fillStyle = `rgba(180,255,180,${pulse})`;
+    ctx.fillText(`🟢 練習中 ${remain}秒`, canvas.width / 2, canvas.height - 14);
+  }
+
+  // ライフ
+  ctx.shadowBlur = 0;
+  ctx.textAlign = 'right';
+  let hearts = '';
+  for (let i = 0; i < CONFIG.LIVES_INIT; i++) {
+    hearts += i < lives ? '❤️' : '🖤';
+  }
+  ctx.font = '28px sans-serif';
+  ctx.fillText(hearts, canvas.width - pad, pad + 34);
+  ctx.restore();
+}
+
+function drawStartScreen() {
+  ctx.save();
+  const cx = canvas.width/2, cy = canvas.height/2;
+  const rec = loadRecord();
+  const td  = getTitleData(rec.total);
+
+  // タイトル
+  ctx.font = 'bold 42px "Arial Rounded MT Bold", sans-serif';
+  ctx.textAlign = 'center';
+  ctx.fillStyle = '#FFD700';
+  ctx.shadowColor = '#FF8C00';
+  ctx.shadowBlur = 30;
+  ctx.fillText('約分マスター', cx, cy - 110);
+  ctx.fillStyle = '#FF6EC7';
+  ctx.shadowColor = '#FF00AA';
+  ctx.fillText('クラッシュ！', cx, cy - 62);
+
+  // 称号バッジ
+  ctx.shadowBlur = 0;
+  const badgeY = cy - 24;
+  ctx.font = `bold 17px "Arial Rounded MT Bold", sans-serif`;
+  ctx.fillStyle = td.color;
+  ctx.shadowColor = td.color;
+  ctx.shadowBlur = 12;
+  ctx.fillText(`${td.icon} ${td.title}`, cx, badgeY);
+  ctx.shadowBlur = 0;
+
+  // ハイスコア / 累計
+  ctx.font = '14px sans-serif';
+  ctx.fillStyle = 'rgba(200,220,255,0.75)';
+  if (rec.best > 0) {
+    ctx.fillText(`🏅 ベスト：${rec.best.toLocaleString()}　累計：${rec.total.toLocaleString()}`, cx, badgeY + 24);
+  }
+
+  // ルール
+  ctx.font = '15px sans-serif';
+  ctx.fillStyle = 'rgba(200,220,255,0.85)';
+  ctx.fillText('✨ 約分できる分数をタップ！ ✨', cx, cy + 14);
+  ctx.font = '13px sans-serif';
+  ctx.fillStyle = 'rgba(180,200,255,0.55)';
+  ctx.fillText('約分できないのにタップ→ミス　|　見逃す→ミス', cx, cy + 38);
+
+  // STARTボタン
+  const bw = 200, bh = 58, bx = cx - bw/2, by = cy + 66;
+  const grad = ctx.createLinearGradient(bx, by, bx, by+bh);
+  grad.addColorStop(0, '#FF6EC7');
+  grad.addColorStop(1, '#8B5CF6');
+  ctx.beginPath();
+  ctx.roundRect(bx, by, bw, bh, 30);
+  ctx.fillStyle = grad;
+  ctx.shadowColor = '#FF6EC7';
+  ctx.shadowBlur = 25;
+  ctx.fill();
+  ctx.shadowBlur = 0;
+  ctx.font = 'bold 26px "Arial Rounded MT Bold", sans-serif';
+  ctx.fillStyle = '#fff';
+  ctx.fillText('▶ START', cx, by + 38);
+  ctx.restore();
+}
+
+// ゲームオーバー画面アニメーション用タイマー
+let gameoverTimer = 0;
+
+function drawGameOver(dt) {
+  gameoverTimer += dt || 16;
+  ctx.save();
+  // オーバーレイ
+  ctx.fillStyle = 'rgba(0,0,0,0.80)';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+  if (!savedResult) { ctx.restore(); return; }
+  const rec = savedResult;
+  const cx = canvas.width/2;
+  let cy = canvas.height/2;
+  ctx.textAlign = 'center';
+
+  // --- GAME OVER タイトル ---
+  ctx.font = 'bold 46px "Arial Rounded MT Bold", sans-serif';
+  ctx.fillStyle = '#FF4444';
+  ctx.shadowColor = '#FF0000';
+  ctx.shadowBlur = 28;
+  ctx.fillText('GAME OVER', cx, cy - 155);
+  ctx.shadowBlur = 0;
+
+  // --- 今回のスコア ---
+  const scoreAlpha = Math.min(1, gameoverTimer / 400);
+  ctx.globalAlpha = scoreAlpha;
+  ctx.font = 'bold 36px "Arial Rounded MT Bold", sans-serif';
+  ctx.fillStyle = '#FFD700';
+  if (rec.isNewBest) {
+    // NEW RECORD 点滅
+    const blink = Math.sin(gameoverTimer * 0.008) > 0;
+    ctx.fillStyle = blink ? '#FFD700' : '#FFA500';
+    ctx.shadowColor = '#FFD700'; ctx.shadowBlur = 20;
+    ctx.fillText(`✨ NEW RECORD!  ${score.toLocaleString()}`, cx, cy - 105);
+    ctx.shadowBlur = 0;
+  } else {
+    ctx.fillText(`スコア：${score.toLocaleString()}`, cx, cy - 105);
+  }
+  ctx.globalAlpha = 1;
+
+  // --- 区切り線 ---
+  ctx.strokeStyle = 'rgba(255,255,255,0.15)';
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(cx - 160, cy - 80); ctx.lineTo(cx + 160, cy - 80);
+  ctx.stroke();
+
+  // --- 統計ボックス ---
+  const statsAlpha = Math.min(1, Math.max(0, (gameoverTimer - 300) / 400));
+  ctx.globalAlpha = statsAlpha;
+
+  // ベストスコア
+  ctx.font = '14px sans-serif';
+  ctx.fillStyle = 'rgba(180,200,255,0.7)';
+  ctx.fillText('ベストスコア', cx - 80, cy - 52);
+  ctx.fillText('累計スコア', cx + 80, cy - 52);
+  ctx.font = 'bold 22px "Arial Rounded MT Bold", sans-serif';
+  ctx.fillStyle = rec.isNewBest ? '#FFD700' : '#FFFFFF';
+  ctx.fillText(rec.best.toLocaleString(), cx - 80, cy - 28);
+  ctx.fillStyle = '#AADDFF';
+  ctx.fillText(rec.total.toLocaleString(), cx + 80, cy - 28);
+  ctx.globalAlpha = 1;
+
+  // --- 称号エリア ---
+  const titleAlpha = Math.min(1, Math.max(0, (gameoverTimer - 600) / 500));
+  ctx.globalAlpha = titleAlpha;
+
+  const prevTd = getTitleData(rec.prevTotal);
+  const newTd  = getTitleData(rec.total);
+  const rankUp = prevTd.title !== newTd.title;
+
+  if (rankUp) {
+    // 称号UP演出
+    const pulse = 1 + Math.sin(gameoverTimer * 0.006) * 0.06;
+    ctx.save();
+    ctx.translate(cx, cy + 35);
+    ctx.scale(pulse, pulse);
+    ctx.font = 'bold 13px sans-serif';
+    ctx.fillStyle = 'rgba(200,220,255,0.7)';
+    ctx.fillText('🎉 称号UP！', 0, -32);
+    ctx.font = '16px sans-serif';
+    ctx.fillStyle = 'rgba(180,200,255,0.6)';
+    ctx.fillText(`${prevTd.icon} ${prevTd.title}  →`, 0, -8);
+    ctx.font = `bold 24px "Arial Rounded MT Bold", sans-serif`;
+    ctx.fillStyle = newTd.color;
+    ctx.shadowColor = newTd.color;
+    ctx.shadowBlur = 20;
+    ctx.fillText(`${newTd.icon} ${newTd.title}`, 0, 22);
+    ctx.shadowBlur = 0;
+    ctx.restore();
+    // 称号UP時はパーティクル追加（一度だけ）
+    if (titleAlpha > 0.95 && titleAlpha <= 1 && !savedResult._titleBurst) {
+      savedResult._titleBurst = true;
+      for (let i = 0; i < 40; i++) particles.push(new Particle(cx, cy + 35, Math.random()*360));
+    }
+  } else {
+    // 通常称号表示
+    ctx.font = '13px sans-serif';
+    ctx.fillStyle = 'rgba(180,200,255,0.6)';
+    ctx.fillText('現在の称号', cx, cy + 8);
+    ctx.font = `bold 22px "Arial Rounded MT Bold", sans-serif`;
+    ctx.fillStyle = newTd.color;
+    ctx.shadowColor = newTd.color;
+    ctx.shadowBlur = 14;
+    ctx.fillText(`${newTd.icon} ${newTd.title}`, cx, cy + 36);
+    ctx.shadowBlur = 0;
+
+    // 次の称号プログレスバー
+    const nextTd = getNextTitle(rec.total);
+    if (nextTd) {
+      const prevThresh = newTd.threshold;
+      const progress = Math.min(1, (rec.total - prevThresh) / (nextTd.threshold - prevThresh));
+      ctx.font = '12px sans-serif';
+      ctx.fillStyle = 'rgba(180,200,255,0.55)';
+      ctx.fillText(`次：${nextTd.icon}${nextTd.title} まで ${(nextTd.threshold - rec.total).toLocaleString()}`, cx, cy + 60);
+      const bw = 200, bh = 8, bx = cx - bw/2, by2 = cy + 68;
+      ctx.beginPath(); ctx.roundRect(bx, by2, bw, bh, 4);
+      ctx.fillStyle = 'rgba(255,255,255,0.12)'; ctx.fill();
+      if (progress > 0) {
+        const pg = ctx.createLinearGradient(bx, 0, bx + bw * progress, 0);
+        pg.addColorStop(0, newTd.color); pg.addColorStop(1, nextTd.color);
+        ctx.beginPath(); ctx.roundRect(bx, by2, bw * progress, bh, 4);
+        ctx.fillStyle = pg;
+        ctx.shadowColor = newTd.color; ctx.shadowBlur = 8;
+        ctx.fill(); ctx.shadowBlur = 0;
+      }
+    }
+  }
+  ctx.globalAlpha = 1;
+
+  // --- もう一度ボタン ---
+  const btnAlpha = Math.min(1, Math.max(0, (gameoverTimer - 900) / 300));
+  ctx.globalAlpha = btnAlpha;
+  const bw = 220, bh = 56, bx2 = cx - bw/2, by3 = cy + (rankUp ? 90 : 105);
+  const grad = ctx.createLinearGradient(bx2, by3, bx2, by3+bh);
+  grad.addColorStop(0, '#FFD700');
+  grad.addColorStop(1, '#FF8C00');
+  ctx.beginPath();
+  ctx.roundRect(bx2, by3, bw, bh, 30);
+  ctx.fillStyle = grad;
+  ctx.shadowColor = '#FFD700';
+  ctx.shadowBlur = 18;
+  ctx.fill();
+  ctx.font = 'bold 22px "Arial Rounded MT Bold", sans-serif';
+  ctx.fillStyle = '#1a0a00';
+  ctx.shadowBlur = 0;
+  ctx.fillText('🔄 もう一度', cx, by3 + 37);
+  ctx.globalAlpha = 1;
+  ctx.restore();
+}
+
+function drawBonus() {
+  if (!bonusState) return;
+  const cx = canvas.width/2, cy = canvas.height/2;
+  const progress = bonusState.timer / 3000;
+
+  // 暗いオーバーレイ
+  ctx.save();
+  ctx.fillStyle = 'rgba(0,0,30,0.85)';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+  // タイマーバー
+  const barW = canvas.width * 0.7;
+  const barH = 14;
+  const barX = cx - barW/2;
+  const barY = cy - 160;
+  ctx.beginPath();
+  ctx.roundRect(barX, barY, barW, barH, 7);
+  ctx.fillStyle = 'rgba(255,255,255,0.15)';
+  ctx.fill();
+  const tcol = progress > 0.5 ? '#FFD700' : progress > 0.25 ? '#FF8C00' : '#FF4444';
+  const timerGrad = ctx.createLinearGradient(barX, 0, barX+barW*progress, 0);
+  timerGrad.addColorStop(0, tcol);
+  timerGrad.addColorStop(1, '#fff');
+  ctx.beginPath();
+  ctx.roundRect(barX, barY, barW * progress, barH, 7);
+  ctx.fillStyle = timerGrad;
+  ctx.shadowColor = tcol;
+  ctx.shadowBlur = 15;
+  ctx.fill();
+  ctx.shadowBlur = 0;
+
+  // ボーナスラベル
+  ctx.font = 'bold 22px "Arial Rounded MT Bold", sans-serif';
+  ctx.textAlign = 'center';
+  ctx.fillStyle = '#FFD700';
+  ctx.shadowColor = '#FF8C00';
+  ctx.shadowBlur = 15;
+  ctx.fillText('⚡ BONUS TIME ⚡', cx, cy - 120);
+  ctx.shadowBlur = 0;
+
+  // 問いかけ
+  const b = bonusState.frac;
+  ctx.font = '18px sans-serif';
+  ctx.fillStyle = 'rgba(200,220,255,0.9)';
+  ctx.fillText(`${b.num} / ${b.den} を何で割る？`, cx, cy - 90);
+
+  // 分数大表示
+  ctx.font = 'bold 52px "Arial Rounded MT Bold", sans-serif';
+  ctx.fillStyle = '#fff';
+  ctx.shadowColor = '#8B5CF6';
+  ctx.shadowBlur = 20;
+  ctx.fillText(b.num, cx, cy - 40);
+  ctx.font = '3px sans-serif';
+  ctx.shadowBlur = 0;
+  ctx.strokeStyle = '#fff';
+  ctx.lineWidth = 3;
+  ctx.beginPath();
+  ctx.moveTo(cx - 35, cy - 18);
+  ctx.lineTo(cx + 35, cy - 18);
+  ctx.stroke();
+  ctx.font = 'bold 52px "Arial Rounded MT Bold", sans-serif';
+  ctx.fillStyle = '#fff';
+  ctx.fillText(b.den, cx, cy + 30);
+
+  // 選択肢ボタン
+  const choices = bonusState.choices;
+  const btnW = 90, btnH = 70;
+  const totalW = btnW * choices.length + 20 * (choices.length - 1);
+  const startX = cx - totalW / 2;
+  bonusState.rects = [];
+  choices.forEach((ch, i) => {
+    const bx = startX + i * (btnW + 20);
+    const by2 = cy + 70;
+    bonusState.rects.push({ x: bx, y: by2, w: btnW, h: btnH });
+    const bg = ctx.createLinearGradient(bx, by2, bx, by2+btnH);
+    bg.addColorStop(0, '#5B21B6');
+    bg.addColorStop(1, '#7C3AED');
+    ctx.beginPath();
+    ctx.roundRect(bx, by2, btnW, btnH, 16);
+    ctx.fillStyle = bg;
+    ctx.shadowColor = '#8B5CF6';
+    ctx.shadowBlur = 15;
+    ctx.fill();
+    ctx.shadowBlur = 0;
+    ctx.strokeStyle = 'rgba(200,180,255,0.5)';
+    ctx.lineWidth = 2;
+    ctx.stroke();
+    ctx.font = 'bold 30px "Arial Rounded MT Bold", sans-serif';
+    ctx.fillStyle = '#fff';
+    ctx.textAlign = 'center';
+    ctx.fillText(ch, bx + btnW/2, by2 + 44);
+  });
+  ctx.restore();
+}
+
+// ============ メインループ ============
+function loop(ts) {
+  requestAnimationFrame(loop);
+  const dt = lastTime ? Math.min(ts - lastTime, 50) : 16;
+  lastTime = ts;
+
+  // 画面揺れ
+  let sx = 0, sy = 0;
+  if (shakeTimer > 0) {
+    shakeTimer -= dt;
+    const intensity = (shakeTimer / CONFIG.SHAKE_DUR) * shakeAmt;
+    sx = (Math.random()-0.5)*intensity;
+    sy = (Math.random()-0.5)*intensity;
+  }
+
+  ctx.save();
+  ctx.translate(sx, sy);
+
+  drawBackground(ts);
+
+  // ⑩ 成功フラッシュ：画面全体を一瞬明るく（白）
+  if (flashTimer > 0) {
+    flashTimer -= dt;
+    const fa = Math.max(0, flashTimer / 140) * 0.22;
+    ctx.fillStyle = `rgba(255,255,255,${fa})`;
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+  }
+
+  if (state === 'start') {
+    drawStartScreen();
+  } else if (state === 'play' || state === 'bonus') {
+    // 難易度上昇
+    if (state === 'play') {
+      elapsedSec += dt / 1000;
+      fallSpeed  = Math.min(CONFIG.FALL_SPEED_MAX,  CONFIG.FALL_SPEED_INIT  + elapsedSec * CONFIG.SPEED_INC_PER_SEC * 40);
+      spawnInterval = Math.max(CONFIG.SPAWN_INTERVAL_MIN, CONFIG.SPAWN_INTERVAL_INIT - elapsedSec * 5);
+
+      // バブルスポーン
+      if (ts - lastSpawnTime > spawnInterval) {
+        spawnBubble();
+        // ⑨ 難易度カーブ：20秒以降は複数スポーン、40秒以降はさらに増加
+        if (elapsedSec > 40 && Math.random() < 0.5) spawnBubble();
+        else if (elapsedSec > 20 && Math.random() < 0.3) spawnBubble();
+        lastSpawnTime = ts;
+      }
+
+      // バブル更新
+      bubbles.forEach(b => b.update(dt));
+      bubbles = bubbles.filter(b => b.alive);
+    }
+
+    // バブル描画
+    bubbles.forEach(b => b.draw());
+
+    // パーティクル
+    particles.forEach(p => { p.update(); p.draw(); });
+    particles = particles.filter(p => p.life > 0);
+
+    // フローティングテキスト
+    floatingTexts.forEach(f => { f.update(); f.draw(); });
+    floatingTexts = floatingTexts.filter(f => f.life > 0);
+
+    drawHUD();
+
+    if (state === 'bonus') drawBonus();
+  } else if (state === 'gameover') {
+    // 背景のバブルはそのまま表示
+    bubbles.forEach(b => b.draw());
+    particles.forEach(p => { p.update(); p.draw(); });
+    particles = particles.filter(p => p.life > 0);
+    drawGameOver(dt);
+  }
+
+  ctx.restore();
+}
+
+// ============ ボーナスタイマー ============
+setInterval(() => {
+  if (state === 'bonus' && bonusState && !bonusState.answered) {
+    bonusState.timer -= 100;
+    if (bonusState.timer <= 0) {
+      // タイムアウト
+      combo = 0;
+      sfxFail();
+      floatingTexts.push(new FloatingText(canvas.width/2, canvas.height/2 - 60, '⏰ 時間切れ！', '#FF8888', 32));
+      state = 'play';
+      bonusState = null;
+    }
+  }
+}, 100);
+
+// ============ 入力ハンドラ ============
+canvas.addEventListener('pointerdown', e => {
+  e.preventDefault();
+  const rect = canvas.getBoundingClientRect();
+  const scaleX = canvas.width  / rect.width;
+  const scaleY = canvas.height / rect.height;
+  const px = (e.clientX - rect.left) * scaleX;
+  const py = (e.clientY - rect.top)  * scaleY;
+  onTap(px, py);
+}, { passive: false });
+
+// ============ 初期化＆スタート ============
+initStars();
+requestAnimationFrame(loop);
+</script>
+</body>
+</html>
