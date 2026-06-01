@@ -180,9 +180,9 @@ let savedResult = null; // { best, total, plays, isNewBest, prevTotal }
 const CONFIG = {
   SPAWN_INTERVAL_INIT: 1200, // ms ★最初からちょい忙しい
   SPAWN_INTERVAL_MIN:  500,
-  FALL_SPEED_INIT:     1.6,  // ★やや速め
-  FALL_SPEED_MAX:      4.0,
-  SPEED_INC_PER_SEC:   0.008,
+  FALL_SPEED_INIT:     1.2,  // ★少しゆっくり
+  FALL_SPEED_MAX:      2.8,
+  SPEED_INC_PER_SEC:   0.025,
   REDUCIBLE_RATIO:     0.55, // 約分できる分数の割合
   BUBBLE_RADIUS:       52,
   LIVES_INIT:          3,
@@ -244,11 +244,8 @@ class Bubble {
     this.spawnTime = performance.now();
     this.hintAlpha = 0;
     this.glowPhase = Math.random() * Math.PI * 2;
-    // ④ 色：7=紫、11=金、その他約分できる=オレンジ〜黄、できない=青〜シアン
-    if (this.divisor === 7)       this.hue = 280; // 紫
-    else if (this.divisor === 11) this.hue = 50;  // 金
-    else if (this.reducible)      this.hue = 30 + Math.random() * 40;  // オレンジ〜黄
-    else                          this.hue = 190 + Math.random() * 40; // 青〜シアン
+    // 色は約分できる/できないや約数に関係なくランダム
+    this.hue = Math.random() * 360;
     // レアバブルは少し大きく
     if (this.divisor === 7 || this.divisor === 11) this.r += 8;
   }
@@ -1010,7 +1007,7 @@ function loop(ts) {
     // 難易度上昇
     if (state === 'play') {
       elapsedSec += dt / 1000;
-      fallSpeed  = Math.min(CONFIG.FALL_SPEED_MAX,  CONFIG.FALL_SPEED_INIT  + elapsedSec * CONFIG.SPEED_INC_PER_SEC * 40);
+      fallSpeed  = Math.min(CONFIG.FALL_SPEED_MAX, CONFIG.FALL_SPEED_INIT + elapsedSec * CONFIG.SPEED_INC_PER_SEC);
       spawnInterval = Math.max(CONFIG.SPAWN_INTERVAL_MIN, CONFIG.SPAWN_INTERVAL_INIT - elapsedSec * 5);
 
       // バブルスポーン
