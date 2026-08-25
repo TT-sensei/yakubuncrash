@@ -113,16 +113,16 @@ function reduce(num, den) {
 
 // ============ 称号テーブル（累計スコア→称号） ============
 const TITLES = [
-  { threshold:      0, title: '約分見習い',       color: '#AAAAAA', icon: '🌱', badge: 'https://raw.githubusercontent.com/TT-sensei/edu-assets/main/assets/web/badges/common/first-step/badge.webp' },
-  { threshold:    500, title: '約分のたまご',      color: '#88DDFF', icon: '🥚', badge: 'https://raw.githubusercontent.com/TT-sensei/edu-assets/main/assets/web/badges/common/discovery/badge.webp' },
-  { threshold:   1500, title: '約分チャレンジャー', color: '#66FF99', icon: '⚔️', badge: 'https://raw.githubusercontent.com/TT-sensei/edu-assets/main/assets/web/badges/common/challenger/badge.webp' },
-  { threshold:   3000, title: '約分ファイター',     color: '#FFDD44', icon: '🔥', badge: 'https://raw.githubusercontent.com/TT-sensei/edu-assets/main/assets/web/badges/common/breakthrough/badge.webp' },
-  { threshold:   6000, title: '約分マスター',       color: '#FF8844', icon: '⭐', badge: 'https://raw.githubusercontent.com/TT-sensei/edu-assets/main/assets/web/badges/common/accuracy/badge.webp' },
-  { threshold:  10000, title: '約分エキスパート',   color: '#FF66CC', icon: '💎', badge: 'https://raw.githubusercontent.com/TT-sensei/edu-assets/main/assets/web/badges/common/deep-thinker/badge.webp' },
-  { threshold:  20000, title: '約分の達人',         color: '#CC66FF', icon: '🏆', badge: 'https://raw.githubusercontent.com/TT-sensei/edu-assets/main/assets/web/badges/common/champion/badge.webp' },
-  { threshold:  40000, title: '約分伝説',           color: '#FF4444', icon: '🌟', badge: 'https://raw.githubusercontent.com/TT-sensei/edu-assets/main/assets/web/badges/common/adventurer/badge.webp' },
-  { threshold:  80000, title: '約分レジェンド',     color: '#FF2299', icon: '👑', badge: 'https://raw.githubusercontent.com/TT-sensei/edu-assets/main/assets/web/badges/common/hidden-badge/badge.webp' },
-  { threshold: 150000, title: '約分神',             color: '#FFD700', icon: '⚡', badge: 'https://raw.githubusercontent.com/TT-sensei/edu-assets/main/assets/web/badges/math/simplify/badge.webp' },
+  { threshold:      0, title: '約分見習い',       color: '#AAAAAA', icon: '🌱' },
+  { threshold:    500, title: '約分のたまご',      color: '#88DDFF', icon: '🥚' },
+  { threshold:   1500, title: '約分チャレンジャー', color: '#66FF99', icon: '⚔️' },
+  { threshold:   3000, title: '約分ファイター',     color: '#FFDD44', icon: '🔥' },
+  { threshold:   6000, title: '約分マスター',       color: '#FF8844', icon: '⭐' },
+  { threshold:  10000, title: '約分エキスパート',   color: '#FF66CC', icon: '💎' },
+  { threshold:  20000, title: '約分の達人',         color: '#CC66FF', icon: '🏆' },
+  { threshold:  40000, title: '約分伝説',           color: '#FF4444', icon: '🌟' },
+  { threshold:  80000, title: '約分レジェンド',     color: '#FF2299', icon: '👑' },
+  { threshold: 150000, title: '約分神',             color: '#FFD700', icon: '⚡' },
 ];
 
 // 累計スコアから称号を返す
@@ -143,30 +143,6 @@ function getNextTitle(totalScore) {
     }
   }
   return TITLES[1];
-}
-
-// ============ 称号バッジ ============
-// edu-assetsの軽量Webバッジを遅延読み込み。読めない場合は既存の絵文字を表示する。
-const badgeImages = new Map();
-function getBadgeImage(td) {
-  if (!td.badge) return null;
-  if (!badgeImages.has(td.badge)) {
-    const img = new Image();
-    img.decoding = 'async';
-    img.src = td.badge;
-    badgeImages.set(td.badge, img);
-  }
-  return badgeImages.get(td.badge);
-}
-function drawTitleBadge(td, x, y, size) {
-  const img = getBadgeImage(td);
-  if (!img || !img.complete || !img.naturalWidth) return false;
-  ctx.save();
-  ctx.shadowColor = td.color;
-  ctx.shadowBlur = Math.max(4, size * 0.25);
-  ctx.drawImage(img, x - size / 2, y - size / 2, size, size);
-  ctx.restore();
-  return true;
 }
 
 // ============ localStorage 永続データ ============
@@ -654,7 +630,7 @@ function drawHUD() {
   ctx.fillStyle = td.color;
   ctx.shadowColor = td.color;
   ctx.shadowBlur = 8;
-  const hudBadge = drawTitleBadge(td, pad + 22, canvas.height - 25, 26);\n  ctx.fillText(`${hudBadge ? '' : td.icon + ' '}${td.title}`, pad + (hudBadge ? 40 : 10), canvas.height - 14);
+  ctx.fillText(`${td.icon} ${td.title}`, pad + 10, canvas.height - 14);
   ctx.shadowBlur = 0;
 
   // コンボ
@@ -714,7 +690,7 @@ function drawStartScreen() {
   ctx.fillStyle = td.color;
   ctx.shadowColor = td.color;
   ctx.shadowBlur = 12;
-  const startBadge = drawTitleBadge(td, cx - 92, badgeY - 6, 34);\n  ctx.fillText(`${startBadge ? '' : td.icon + ' '}${td.title}`, cx + (startBadge ? 10 : 0), badgeY);
+  ctx.fillText(`${td.icon} ${td.title}`, cx, badgeY);
   ctx.shadowBlur = 0;
 
   // ハイスコア / 累計
@@ -838,7 +814,7 @@ function drawGameOver(dt) {
     ctx.fillStyle = newTd.color;
     ctx.shadowColor = newTd.color;
     ctx.shadowBlur = 20;
-    drawTitleBadge(newTd, -112, 10, 42);\n    ctx.fillText(`${newTd.icon} ${newTd.title}`, 0, 22);
+    ctx.fillText(`${newTd.icon} ${newTd.title}`, 0, 22);
     ctx.shadowBlur = 0;
     ctx.restore();
     // 称号UP時はパーティクル追加（一度だけ）
@@ -855,7 +831,7 @@ function drawGameOver(dt) {
     ctx.fillStyle = newTd.color;
     ctx.shadowColor = newTd.color;
     ctx.shadowBlur = 14;
-    const resultBadge = drawTitleBadge(newTd, cx - 118, cy + 29, 42);\n    ctx.fillText(`${resultBadge ? '' : newTd.icon + ' '}${newTd.title}`, cx + (resultBadge ? 10 : 0), cy + 36);
+    ctx.fillText(`${newTd.icon} ${newTd.title}`, cx, cy + 36);
     ctx.shadowBlur = 0;
 
     // 次の称号プログレスバー
